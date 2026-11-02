@@ -101,4 +101,58 @@ pre {
 }
 .approve-btn:disabled { opacity: 0.5; cursor: default; }
 .dl { display: inline-block; margin: 8px 12px 0 0; font-size: 13px; }
+.live-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin: 20px 0;
+}
+.live-panel h2 { margin: 0 0 6px; font-size: 18px; }
+.live-row { margin: 16px 0; }
+.live-row b { display: block; margin-bottom: 6px; font-size: 14px; }
+.live-row input[type="text"],
+.live-row input:not([type="file"]) {
+  width: 100%;
+  background: #0d1117;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.live-row textarea {
+  width: 100%;
+  background: #0d1117;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin: 8px 0;
+  resize: vertical;
+}
+.live-row button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.live-row button:disabled { opacity: 0.5; cursor: default; }
+.live-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+.mini-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.muted { color: var(--muted); font-size: 13px; }
+.err { color: var(--red); font-size: 13px; }
 footer { margin-top: 28px; color: var(--muted); font-size: 13px; }

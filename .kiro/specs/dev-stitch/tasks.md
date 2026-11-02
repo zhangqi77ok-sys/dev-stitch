@@ -12,15 +12,15 @@
 - [x] MIT LICENSE, README with honest Kiro status
 - [x] `npm run build` passes; public GitHub repo created and pushed
 
-## Slice 2 — Live ingestion + persistence (planned)
+## Slice 2 — Live ingestion + persistence (DONE, slice 2 delivery)
 
-- [ ] Public GitHub API reader (unauthenticated, rate-limit aware) that
+- [x] Public GitHub API reader (unauthenticated, rate-limit aware) that
       maps real issues/PRs into the Item shape
-- [ ] RSS parser for user-supplied feed URLs (client-side fetch, CORS-safe
+- [x] RSS parser for user-supplied feed URLs (client-side fetch, CORS-safe
       defaults, graceful failure per feed)
-- [ ] Local docs: upload or paste markdown, gap-detected into doc items
-- [ ] localStorage persistence for approvals; export queue as JSON
-- [ ] Unit tests for draft generators; property test: every item has all
+- [x] Local docs: upload or paste markdown, gap-detected into doc items
+- [x] localStorage persistence for approvals; export queue as JSON
+- [x] Unit tests for draft generators; property test: every item has all
       three crew blocks
 
 ## Slice 3 — Real crew + safe writes (planned)
