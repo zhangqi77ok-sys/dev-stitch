@@ -1,1 +1,13 @@
-{"description":"When a new item enters the queue, run the three crew roles (Triage, Researcher, Critic) and require all three blocks before the item becomes visible.","name":"triage-on-ingest","note":"Slice 1 has no live ingestion, so this hook is configuration only: seeded items already carry all three blocks. Slice 3 wires it to real runs.","status":"declared-slice-1","steps":["Triage: assign class, priority P0-P3, score, reason","Researcher: write summary and context","Critic: set verdict pass/flag with a note; flags must name the blocker","Reject the item (do not display) if any block is missing"],"trigger":"on-item-ingest"}
+{
+  "description": "When a new item enters the queue, run the three crew roles (Triage, Researcher, Critic) and require all three blocks before the item becomes visible.",
+  "name": "triage-on-ingest",
+  "note": "Slice 3: this hook now runs as code, not config. appendLive in app/page.js passes every ingested batch through applyTriageHook (lib/crew.js), which rejects items failing validateItem (missing a crew block) and reports the rejected count in the UI instead of silently dropping records. Live items start with the slice 2 keyword heuristic; when the server has DEV_STITCH_GEMINI_API_KEY configured, the model crew replaces the heuristic blocks via /api/crew (key server-side only, never bundled). With no key, heuristic + seeded demo keep working.",
+  "status": "live-slice-3",
+  "steps": [
+    "Triage: assign class, priority P0-P3, score, reason",
+    "Researcher: write summary and context",
+    "Critic: set verdict pass/flag with a note; flags must name the blocker",
+    "Reject the item (do not display) if any block is missing"
+  ],
+  "trigger": "on-item-ingest"
+}

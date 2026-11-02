@@ -23,15 +23,19 @@
 - [x] Unit tests for draft generators; property test: every item has all
       three crew blocks
 
-## Slice 3 — Real crew + safe writes (planned)
+## Slice 3 — Real crew + safe writes (DONE, slice 3 delivery)
 
-- [ ] Wire Triage / Researcher / Critic to model calls behind the same
-      Item interface (provider key supplied by the user, never bundled)
-- [ ] Kiro hooks actually firing: triage-on-ingest on new items,
+- [x] Wire Triage / Researcher / Critic to model calls behind the same
+      Item interface (server route /api/crew, key in server env only,
+      strict reply validation, heuristic fallback with no key)
+- [x] Kiro hooks actually firing: triage-on-ingest on new items,
       critic-gate blocking approve on unreviewed flags unless overridden
-- [ ] Optional authenticated GitHub draft-issue creation, behind an
+- [x] Optional authenticated GitHub draft-issue creation, behind an
       explicit user approval step per item (default off)
-- [ ] Demo video (<3 min) + submission write-up for Devpost
+- [x] Demo video (<3 min) + submission write-up for Devpost
+      (video file + script in the delivery dir, Devpost text in
+      docs/devpost-submission-draft.md; upload/submission/Pages-enable
+      are pending publish confirmations, NOT done in slice 3)
 
 ## Out of scope (deliberate)
 

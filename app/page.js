@@ -8,6 +8,11 @@ import {
   mapRssEntry,
   detectDocGaps,
 } from "../lib/ingest";
+import {
+  enhanceItem,
+  canApprove,
+  applyTriageHook,
+} from "../lib/crew";
 
 const SOURCE_LABEL = { github: "GitHub", rss: "RSS", docs: "Local docs" };
 const APPROVALS_KEY = "dev-stitch-approvals-v1";
@@ -34,6 +39,24 @@ export default function Home() {
   const [approvalsLoaded, setApprovalsLoaded] = useState(false);
   const [liveItems, setLiveItems] = useState([]);
   const [liveNote, setLiveNote] = useState("");
+  // Slice 3: model crew status + per-item crew source + critic overrides.
+  // modelStatus: "unknown" | "available" | "unavailable" (no key, or the
+  // static export where /api/crew does not exist — both degrade to the
+  // heuristic, never a crash).
+  const [modelStatus, setModelStatus] = useState("unknown");
+  const [modelNote, setModelNote] = useState("");
+  const [enhancing, setEnhancing] = useState({});
+  const [crewSource, setCrewSource] = useState({});
+  const [overrides, setOverrides] = useState({});
+  // Optional GitHub issue creation (default off): token lives only in
+  // this component's state, is cleared after every attempt, and is never
+  // stored in localStorage or sent anywhere except api.github.com.
+  const [createOpen, setCreateOpen] = useState("");
+  const [createRepo, setCreateRepo] = useState("");
+  const [createToken, setCreateToken] = useState("");
+  const [createConfirm, setCreateConfirm] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createResult, setCreateResult] = useState("");
 
   // GitHub panel state
   const [repoInput, setRepoInput] = useState("");
@@ -54,6 +77,16 @@ export default function Home() {
   useEffect(() => {
     setApproved(loadApprovals());
     setApprovalsLoaded(true);
+  }, []);
+  // Slice 3: probe the server crew route. A 404 (static export) or any
+  // failure means "no model here" — the heuristic stays, by design.
+  useEffect(() => {
+    fetch("/api/crew")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) =>
+        setModelStatus(d && d.modelConfigured ? "available" : "unavailable")
+      )
+      .catch(() => setModelStatus("unavailable"));
   }, []);
   useEffect(() => {
     if (!approvalsLoaded) return;
@@ -84,14 +117,38 @@ export default function Home() {
   const approvedCount = allItems.filter((i) => approved[i.id]).length;
 
   function appendLive(mapped, note) {
+    // Slice 3 triage-on-ingest hook, as code: an item enters the queue
+    // only with all three crew blocks. Rejected records are reported,
+    // never silently dropped.
+    const { accepted, rejected } = applyTriageHook(mapped);
     const seen = new Set(liveItems.map((i) => i.id));
-    const fresh = mapped.filter(
+    const fresh = accepted.filter(
       (i) => !seen.has(i.id) && !SEED_ITEMS.some((s) => s.id === i.id)
     );
+    // Fresh ids must not inherit a stale "model" badge or a stale flag
+    // override from a previous fetch of the same id: the new record is
+    // heuristic until it is enhanced again.
+    if (fresh.length > 0) {
+      const freshIds = new Set(fresh.map((i) => i.id));
+      setCrewSource((prev) => {
+        const next = { ...prev };
+        freshIds.forEach((id) => delete next[id]);
+        return next;
+      });
+      setOverrides((prev) => {
+        const next = { ...prev };
+        freshIds.forEach((id) => delete next[id]);
+        return next;
+      });
+    }
+    const rejectedNote =
+      rejected.length > 0
+        ? ` (${rejected.length} record(s) rejected by the triage hook: missing a crew block.)`
+        : "";
     setLiveNote(
-      fresh.length === mapped.length
-        ? note
-        : `${note} (${mapped.length - fresh.length} already in the queue, skipped.)`
+      fresh.length === accepted.length
+        ? `${note}${rejectedNote}`
+        : `${note} (${accepted.length - fresh.length} already in the queue, skipped.)${rejectedNote}`
     );
     setLiveItems((prev) => [...prev, ...fresh]);
   }
@@ -218,6 +275,98 @@ export default function Home() {
     reader.readAsText(file);
   }
 
+  // Slice 3: enhance one live item with the model crew. The item's
+  // stored summary + context stand in for the raw body (live mappers do
+  // not retain full bodies in the Item shape). On any failure — no key,
+  // model error, unparsable reply — the heuristic item stays untouched
+  // and the failure is reported, never rendered as a broken card.
+  async function enhanceLiveItem(item) {
+    if (modelStatus !== "available" || enhancing[item.id]) return;
+    setEnhancing((prev) => ({ ...prev, [item.id]: true }));
+    setModelNote("");
+    try {
+      const res = await fetch("/api/crew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: item.title,
+          body: `${item.research.summary} ${item.research.context}`,
+          labels: [],
+        }),
+      });
+      if (!res.ok) {
+        setModelNote(
+          res.status === 503
+            ? "Model crew is not configured on this server (no key) — heuristic kept."
+            : "Model crew call failed — heuristic kept."
+        );
+        return;
+      }
+      const data = await res.json();
+      const next = enhanceItem(item, data.crew);
+      if (!next) {
+        setModelNote("Model crew reply failed validation — heuristic kept.");
+        return;
+      }
+      setLiveItems((prev) => prev.map((i) => (i.id === item.id ? next : i)));
+      setCrewSource((prev) => ({ ...prev, [item.id]: "model" }));
+    } catch {
+      setModelNote("Model crew call failed (network) — heuristic kept.");
+    } finally {
+      setEnhancing((prev) => ({ ...prev, [item.id]: false }));
+    }
+  }
+
+  async function enhanceAllLive() {
+    for (const item of liveItems) {
+      if (crewSource[item.id] === "model") continue;
+      // Sequential, one at a time: polite to a free-tier model.
+      await enhanceLiveItem(item);
+    }
+  }
+
+  // Slice 3: optional authenticated GitHub issue creation. Default off:
+  // nothing happens until the user opens the panel, types a repo + token,
+  // and ticks the explicit confirmation. This creates a REAL public
+  // issue (GitHub has no draft issues) — the panel says so. The token
+  // is cleared after every attempt and never persisted.
+  async function createGitHubIssue(item) {
+    const cleaned = createRepo.trim().replace(/^https?:\/\/github\.com\//i, "");
+    const [owner, repo] = cleaned.split("/").map((s) => s.trim());
+    if (!owner || !repo || !createToken.trim() || !createConfirm) {
+      setCreateResult("Enter owner/repo, a token, and tick the confirmation.");
+      return;
+    }
+    setCreateBusy(true);
+    setCreateResult("");
+    try {
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${createToken.trim()}`,
+        },
+        body: JSON.stringify({
+          title: item.title,
+          body: draftIssue(item),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCreateResult(
+          `GitHub refused (HTTP ${res.status}): ${data.message || "check the repo name and token scope (needs repo write on that repo)."}` 
+        );
+        return;
+      }
+      setCreateResult(`Created: ${data.html_url || "(no URL returned)"}`);
+    } catch (e) {
+      setCreateResult(`Request failed: ${e.message}`);
+    } finally {
+      setCreateToken("");
+      setCreateBusy(false);
+    }
+  }
+
   function clearApprovals() {
     setApproved({});
     try {
@@ -250,6 +399,9 @@ export default function Home() {
         same queue and mapped to the same Item shape. Approvals are stored
         in this browser (localStorage) and survive a refresh. Approving an
         item only generates draft text on this page — never a GitHub write.
+        Slice 3: the triage-on-ingest hook now runs as code (items missing
+        a crew block are rejected, not displayed), and a flagged item
+        cannot be approved until you explicitly override the flag.
       </div>
 
       <div className="stats">
@@ -270,12 +422,37 @@ export default function Home() {
       </div>
 
       <section className="live-panel">
-        <h2>Live sources (slice 2)</h2>
+        <h2>Live sources (slice 2) + model crew (slice 3)</h2>
         <p className="muted">
-          Live triage is a deterministic keyword heuristic, not a model call
-          — every live card&apos;s Critic note says so. Seeded demo mode
-          keeps working with no network at all.
+          Live triage starts as a deterministic keyword heuristic — every
+          live card&apos;s Critic note says so. When this server has a
+          model key configured, &ldquo;Run model crew&rdquo; replaces the
+          heuristic blocks with real model output (free-tier Gemini via a
+          server route; the key never reaches the browser). With no key,
+          the heuristic and seeded demo keep working unchanged.
         </p>
+
+        <div className="live-row">
+          <b>Model crew</b>
+          <span className="muted">
+            {modelStatus === "unknown" && "Checking server…"}
+            {modelStatus === "available" &&
+              "Available on this server — model calls will replace heuristic blocks."}
+            {modelStatus === "unavailable" &&
+              "Not configured here (no server key, or static export) — heuristic mode."}
+          </span>
+          <button
+            onClick={enhanceAllLive}
+            disabled={
+              modelStatus !== "available" ||
+              liveItems.length === 0 ||
+              Object.values(enhancing).some(Boolean)
+            }
+          >
+            Run model crew on live items
+          </button>
+          {modelNote && <p className="muted">{modelNote}</p>}
+        </div>
 
         <div className="live-row">
           <b>GitHub (public, no key)</b>
@@ -397,6 +574,11 @@ export default function Home() {
               >
                 critic: {item.critic.verdict}
               </span>
+              {liveItems.some((l) => l.id === item.id) && (
+                <span className="badge">
+                  {crewSource[item.id] === "model" ? "model crew" : "heuristic"}
+                </span>
+              )}
               {isApproved && <span className="badge">✓ approved</span>}
             </div>
 
@@ -418,14 +600,51 @@ export default function Home() {
             </div>
 
             {!isApproved ? (
-              <button
-                className="approve-btn"
-                onClick={() =>
-                  setApproved((prev) => ({ ...prev, [item.id]: true }))
-                }
-              >
-                Approve → generate draft issue &amp; patch
-              </button>
+              <>
+                {!canApprove(item.critic.verdict, !!overrides[item.id]) ? (
+                  <div className="section">
+                    <b>Critic gate — approval blocked</b>
+                    This item is flagged: {item.critic.note} Approval stays
+                    blocked until you review the flag and explicitly
+                    override it.
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!!overrides[item.id]}
+                        onChange={(e) =>
+                          setOverrides((prev) => ({
+                            ...prev,
+                            [item.id]: e.target.checked,
+                          }))
+                        }
+                      />{" "}
+                      I reviewed the flag and approve anyway
+                    </label>
+                  </div>
+                ) : (
+                  <button
+                    className="approve-btn"
+                    onClick={() =>
+                      setApproved((prev) => ({ ...prev, [item.id]: true }))
+                    }
+                  >
+                    Approve → generate draft issue &amp; patch
+                  </button>
+                )}
+                {liveItems.some((l) => l.id === item.id) &&
+                  modelStatus === "available" &&
+                  crewSource[item.id] !== "model" && (
+                    <button
+                      className="mini-btn"
+                      onClick={() => enhanceLiveItem(item)}
+                      disabled={!!enhancing[item.id]}
+                    >
+                      {enhancing[item.id]
+                        ? "Running model crew…"
+                        : "Enhance with model crew"}
+                    </button>
+                  )}
+              </>
             ) : (
               <>
                 <div className="section">
@@ -450,6 +669,64 @@ export default function Home() {
                     ⬇ Download draft patch
                   </a>
                 </div>
+                {createOpen === item.id ? (
+                  <div className="section">
+                    <b>Create GitHub issue (optional, off by default)</b>
+                    <p className="muted">
+                      Warning: this creates a REAL public issue in the repo
+                      you name — GitHub has no draft issues. Nothing is
+                      posted until you submit below. Your token is used for
+                      this one request only, is cleared afterwards, and is
+                      never stored.
+                    </p>
+                    <input
+                      value={createRepo}
+                      onChange={(e) => setCreateRepo(e.target.value)}
+                      placeholder="owner/repo to post the issue to"
+                      aria-label="Repository to post the issue to"
+                    />
+                    <input
+                      type="password"
+                      value={createToken}
+                      onChange={(e) => setCreateToken(e.target.value)}
+                      placeholder="GitHub token (repo write on that repo)"
+                      aria-label="GitHub token"
+                    />
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={createConfirm}
+                        onChange={(e) => setCreateConfirm(e.target.checked)}
+                      />{" "}
+                      I understand this posts a real public issue
+                    </label>
+                    <button
+                      onClick={() => createGitHubIssue(item)}
+                      disabled={createBusy}
+                    >
+                      {createBusy ? "Posting…" : "Create issue"}
+                    </button>{" "}
+                    <button
+                      onClick={() => {
+                        setCreateOpen("");
+                        setCreateResult("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {createResult && <p className="muted">{createResult}</p>}
+                  </div>
+                ) : (
+                  <button
+                    className="mini-btn"
+                    onClick={() => {
+                      setCreateOpen(item.id);
+                      setCreateResult("");
+                    }}
+                  >
+                    Create GitHub issue (optional)
+                  </button>
+                )}
               </>
             )}
           </article>
@@ -459,9 +736,10 @@ export default function Home() {
       {items.length === 0 && <p>No items match this filter.</p>}
 
       <footer>
-        Slice 2: live GitHub/RSS/doc ingestion + localStorage approvals +
-        queue JSON export + tests. Real model calls, Kiro hooks firing and
-        the demo video are slice 3. See README.md for the honest Kiro status.
+        Slice 3: model crew behind a server route (key in server env only,
+        heuristic fallback with no key), triage-on-ingest hook and critic
+        gate as running code, optional authenticated issue creation (off
+        by default). See README.md for the honest Kiro status.
       </footer>
     </main>
   );
